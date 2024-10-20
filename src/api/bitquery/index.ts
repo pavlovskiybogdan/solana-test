@@ -23,7 +23,7 @@ export const fetchTokens = async () => {
               Instruction: { Program: { Address: { is: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }, Method: { in: ["initializeMint", "initializeMint2", "initializeMint3"] }}}
             }
             orderBy: { ascending: Block_Time }
-            limit: { count: 10 }
+            limit: { count: 20 }
           ) {
             Block {
               Date
@@ -52,7 +52,9 @@ export const fetchTokens = async () => {
     }
   });
 
-  return result.data.Solana.Instructions.map((record: Record<string, any>) => {
-    return record.Instruction.Accounts[0].Address;
-  });
+  return result.data.Solana.Instructions
+    .map((record: Record<string, any>) => {
+      return record.Instruction.Accounts[0].Address;
+    })
+    .filter((address: string) => address.slice(-4) === 'pump')
 }

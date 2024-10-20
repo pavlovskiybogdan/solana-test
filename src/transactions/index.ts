@@ -1,46 +1,72 @@
-import * as solanaWeb3 from '@solana/web3.js';
-import * as splToken from '@solana/spl-token';
+import {
+  Connection,
+  PublicKey,
+  Keypair,
+  VersionedTransaction,
+} from '@solana/web3.js';
+import { getMint } from '@solana/spl-token';
+import { getJupQuote, getJupSwapTransaction } from '../api/jupiter';
 
-const performSwapTransaction = async (
-  connection: solanaWeb3.Connection,
-  tokenMintAddressFrom: string,
-  tokenMintAddressTo: string,
-  keyPair: solanaWeb3.Keypair,
-) => {
-  const TOKEN_A_MINT = new solanaWeb3.PublicKey(tokenMintAddressFrom);
-  const TOKEN_B_MINT = new solanaWeb3.PublicKey(tokenMintAddressTo);
+export class SolTransactionsService {
+  private readonly connection: Connection;
 
-  const tokenAAccount = await splToken.getOrCreateAssociatedTokenAccount(
-    connection,
-    keyPair,
-    TOKEN_A_MINT,
-    keyPair.publicKey,
-  );
-  const tokenBAccount = await splToken.getOrCreateAssociatedTokenAccount(
-    connection,
-    keyPair,
-    TOKEN_B_MINT,
-    keyPair.publicKey
-  );
+  constructor(connection: Connection) {
+    this.connection = connection;
+  }
 
-  const RAYDIUM_AMM_ID = new solanaWeb3.PublicKey('RaydiumAMMAddress');
-  const SWAP_PROGRAM_ID = new solanaWeb3.PublicKey('RaydiumSwapProgramID');
+  async buildSwapTransaction(
+    publicKey: PublicKey,
+    inputMint: string,
+    outputMint: string,
+    amount: number,
+    slippageBps = 0.5,
+  ) {
+    const inputMintData = await getMint(this.connection, new PublicKey(inputMint));
 
-  const swapInstruction = new solanaWeb3.TransactionInstruction({
-    keys: [
-      { pubkey: keyPair.publicKey, isSigner: true, isWritable: true },
-      { pubkey: tokenAAccount.address, isSigner: false, isWritable: true },
-      { pubkey: tokenBAccount.address, isSigner: false, isWritable: true },
-      { pubkey: RAYDIUM_AMM_ID, isSigner: false, isWritable: true },
-    ],
-    programId: SWAP_PROGRAM_ID,
-    data: Buffer.from([]), // You'd encode specific swap data here, like amounts, slippage, etc.
-  });
+    const inputAmount = amount * Math.pow(10, inputMintData.decimals);
+    const slippagePercentage = slippageBps * 100;
 
-  const transaction = new solanaWeb3.Transaction().add(swapInstruction);
-  const signature = await solanaWeb3.sendAndConfirmTransaction(
-    connection,
-    transaction,
-    [keyPair],
-  );
+    try {
+      const jupQuote = await getJupQuote(
+        inputMint,
+        outputMint,
+        inputAmount,
+        slippagePercentage,
+      );
+      return getJupSwapTransaction(
+        jupQuote,
+        publicKey.toString(),
+        true,
+      );
+    } catch (err) {
+      console.error('Error building swap transaction:', err);
+      throw new Error('Error building swap transaction');
+    }
+  }
+
+  async swap(
+    keypair: Keypair,
+    swapTransactionObj: Record<any, any>,
+  ) {
+    // @ts-ignore
+    const swapTransactionBuf = Buffer.from(swapTransactionObj.swapTransaction, 'base64');
+    const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+
+    transaction.sign([keypair]);
+
+    const latestBlockHash = await this.connection.getLatestBlockhash();
+
+    const rawTransaction = transaction.serialize()
+    const txId = await this.connection.sendRawTransaction(rawTransaction, {
+      skipPreflight: true,
+      maxRetries: 2
+    });
+    await this.connection.confirmTransaction({
+      blockhash: latestBlockHash.blockhash,
+      lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
+      signature: txId,
+    });
+
+    return txId;
+  }
 }
